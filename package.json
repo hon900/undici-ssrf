@@ -1,0 +1,17 @@
+{
+  "name": "undici-ssrf",
+  "version": "0.8.2",
+  "description": "undici interceptor that rejects SSRF-prone origins using hostfence.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": "./src/index.js",
+  "license": "MIT",
+  "repository": "github:hon900/undici-ssrf",
+  "engines": { "node": ">=18.18.0" },
+  "peerDependencies": {
+    "undici": ">=6"
+  },
+  "dependencies": {
+    "hostfence": "github:hon900/hostfence#v1.2.0"
+  }
+}
