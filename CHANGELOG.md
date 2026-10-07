@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 — 2026-10-07
+
+- Synchronize the hostfence manifest and lockfile at 1.4.1; verify dependency
+  consistency before running tests so local workspace links cannot hide drift.
+- Remove ineffective request-level `connect.lookup` assignment from the existing
+  preflight interceptor. Add `createSsrfAgent`, which checks each new connection
+  and installs a validated lookup on Undici's actual socket connector.
+- Preserve the canonical hostname for HTTP Host and TLS verification; reject
+  connector, factory, routing-header, and automatic-redirect overrides.
+- Add real local HTTP/TLS tests for pinning, rebinding, private/mixed answers,
+  canonical Host/SNI, and rejection of untrusted certificates.
+
 ## 0.9.0 — 2026-10-04
 
 - Adopt hostfence 1.3.0 destination-policy hardening and standalone CI.

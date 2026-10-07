@@ -1,4 +1,6 @@
 import { Hostfence, HostfenceError, pinLookup } from "hostfence";
+import { isIP } from "node:net";
+import { Agent, buildConnector } from "undici";
 
 const fence = new Hostfence();
 
@@ -60,11 +62,10 @@ export function createSsrfInterceptor(policy = {}) {
         reportError(handler, error);
         return true;
       }
-      void policyFence.assertPin(request.origin).then(
-        ({ url, pin }) => {
+      void policyFence.assert(request.origin).then(
+        (url) => {
           try {
             request.origin = url.origin;
-            request.connect = { ...(request.connect ?? {}), lookup: pinLookup(pin) };
             dispatch(request, handler);
           } catch (error) {
             reportError(handler, error);
@@ -81,6 +82,73 @@ export function createSsrfInterceptor(policy = {}) {
 }
 
 export const ssrfInterceptor = createSsrfInterceptor();
+
+const agentOptionNames = new Set([
+  "connections", "pipelining", "headersTimeout", "bodyTimeout", "connectTimeout",
+  "keepAliveTimeout", "keepAliveMaxTimeout", "keepAliveTimeoutThreshold",
+  "maxHeaderSize", "maxResponseSize",
+]);
+
+function guardAgentOptions(dispatch) {
+  return function guarded(opts, handler) {
+    if (opts.maxRedirections != null && opts.maxRedirections !== 0) {
+      throw new TypeError("createSsrfAgent requires manual redirect handling");
+    }
+    if (opts.servername !== undefined || opts.connect !== undefined) {
+      throw new TypeError("createSsrfAgent does not accept request connection overrides");
+    }
+    const headers = opts.headers;
+    const names = Array.isArray(headers)
+      ? headers.filter((_, index) => index % 2 === 0)
+      : Object.keys(headers ?? {});
+    if (names.some((name) => /^(host|:authority)$/i.test(String(name)))) {
+      throw new TypeError("createSsrfAgent sets Host and TLS servername from the validated origin");
+    }
+    return dispatch(opts, handler);
+  };
+}
+
+/** An owned Undici dispatcher with policy enforcement at every new socket. */
+export function createSsrfAgent(policy = {}, options = {}) {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("agent options must be an object");
+  }
+  for (const name of Object.keys(options)) {
+    if (!agentOptionNames.has(name)) throw new TypeError(`unsupported agent option: ${name}`);
+  }
+  const connectionFence = new Hostfence(policy);
+  const connectTimeout = options.connectTimeout;
+  const agent = new Agent({
+    ...options,
+    maxRedirections: 0,
+    connect(connection, callback) {
+      // Undici calls a constructor-level connector for every new socket.
+      // A request-level opts.connect is not used by Agent/Pool/Client.
+      const hostname = isIP(connection.hostname) === 6
+        ? `[${connection.hostname}]` : connection.hostname;
+      const origin = `${connection.protocol}//${hostname}${connection.port ? `:${connection.port}` : ""}`;
+      void connectionFence.assertPin(origin).then(({ url, pin }) => {
+        try {
+          if (connection.httpSocket) throw new TypeError("preconnected sockets are not supported");
+          const connector = buildConnector({ lookup: pinLookup(pin), timeout: connectTimeout });
+          connector({
+            ...connection,
+            host: url.host,
+            hostname: pin.servername,
+            port: String(pin.port),
+            // Never use an alternate Host header as the certificate identity.
+            servername: isIP(pin.servername) ? undefined : pin.servername,
+          }, callback);
+        } catch (error) {
+          callback(error, null);
+        }
+      }, (error) => callback(error, null));
+    },
+  });
+  // compose applies interceptors from inner to outer. The preflight guard
+  // snapshots metadata and reports errors thrown by the inner options guard.
+  return agent.compose(guardAgentOptions, createSsrfInterceptor(policy));
+}
 
 export async function assertOrigin(url) {
   return fence.assert(url);

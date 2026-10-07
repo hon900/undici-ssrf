@@ -1,23 +1,22 @@
 # undici-ssrf
 
-[Undici](https://github.com/nodejs/undici) origin-policy interceptor backed by
-[hostfence](https://github.com/hon900/hostfence). Check a destination before
-dispatching a request and deliver policy failures through Undici's error handler.
+[Undici](https://github.com/nodejs/undici) origin-policy checks and a socket-pinning
+agent backed by [hostfence](https://github.com/hon900/hostfence). Check requests
+before dispatch and bind new connections to an address validated at connection time.
 
 Requires Node.js 18.18 or later and a compatible Undici release. Undici 7 has a
 higher Node.js requirement; follow that release's engine constraints.
 
 ```sh
-npm install github:hon900/undici-ssrf#v0.9.0 undici@6
+npm install github:hon900/undici-ssrf#v0.9.1 undici@6
 ```
 
-## Default policy
+## Pinned connections
 
 ```js
-import { Agent } from "undici";
-import { ssrfInterceptor } from "undici-ssrf";
+import { createSsrfAgent } from "undici-ssrf";
 
-const dispatcher = new Agent().compose(ssrfInterceptor);
+const dispatcher = createSsrfAgent();
 try {
   const { body } = await dispatcher.request({
     origin: "https://example.com",
@@ -30,27 +29,55 @@ try {
 }
 ```
 
-Use this on an `Agent` with an explicit request origin. A bound `Client` or
-`Pool` may omit `opts.origin`; the interceptor cannot inspect the bound origin
-from the dispatch function and will reject an absent target. Include the origin
-explicitly if using such a dispatcher.
+`createSsrfAgent(policy, options)` returns an owned Undici dispatcher; close it
+after consuming response bodies. It validates every request's explicit origin.
+On each new socket it validates the actual connection hostname again, then gives
+Undici's constructor-level connector a lookup function returning only the
+selected validated address. There is no subsequent operating-system DNS lookup.
+The original hostname remains the HTTP Host and TLS SNI/certificate identity;
+normal certificate verification stays enabled. The initial connection therefore
+does two policy lookups (preflight and connection); pooled sockets can be reused.
+
+`options` supports `connections`, `pipelining`, `headersTimeout`, `bodyTimeout`,
+`connectTimeout`, `keepAliveTimeout`, `keepAliveMaxTimeout`,
+`keepAliveTimeoutThreshold`, `maxHeaderSize`, and `maxResponseSize`. Other options
+are rejected, including custom connectors, factories, proxies, and interceptor
+overrides. Requests cannot override `Host`, `:authority`, `servername`, or
+`connect`. Automatic redirects are disabled; nonzero `maxRedirections` is
+rejected. Submit each redirect destination as a new request through this dispatcher.
 
 ## Custom policy
 
 ```js
-import { Agent } from "undici";
-import { createSsrfInterceptor } from "undici-ssrf";
+import { createSsrfAgent } from "undici-ssrf";
 
-const dispatcher = new Agent().compose(createSsrfInterceptor({
+const dispatcher = createSsrfAgent({
   protocols: ["https"],
   allowedHosts: ["api.example.com"],
-}));
+}, { connections: 4 });
 ```
 
-`createSsrfInterceptor(policy)` accepts hostfence policy options, including a
+Both factories accept hostfence policy options, including a
 custom asynchronous `lookup(hostname)` returning an array of IP address strings.
 An allowlist does not override address restrictions. Each factory call owns its
 policy instance; the existing `ssrfInterceptor` export retains the default policy.
+
+## Existing dispatcher: preflight only
+
+```js
+import { Agent } from "undici";
+import { createSsrfInterceptor, ssrfInterceptor } from "undici-ssrf";
+
+const dispatcher = new Agent().compose(ssrfInterceptor);
+// Or: new Agent().compose(createSsrfInterceptor({ allowedHosts: ["api.example.com"] }))
+```
+
+`ssrfInterceptor` and `createSsrfInterceptor(policy)` preserve the original
+preflight API. They do **not** configure the connector of an existing dispatcher.
+Undici does not apply request-level `opts.connect.lookup` to Agent/Pool/Client
+socket creation. Use `createSsrfAgent` when socket pinning is required. Include
+`opts.origin` explicitly; a bound Client or Pool can otherwise omit its target,
+which the interceptor cannot infer and will reject.
 
 `assertOrigin(stringOrUrl)` remains available as a standalone default-policy
 assertion. It resolves to a `URL` or rejects with the exported `HostfenceError`.
@@ -84,18 +111,22 @@ and the asynchronous acceptance pattern used by its
 
 ## Security boundary
 
-This is an **origin preflight check**. Policy checks cover `opts.origin`, not
+Policy checks cover `opts.origin`, not
 request paths, query values, header contents, or bodies. Metadata snapshots
-prevent later mutation during DNS; they do not authorize a custom `Host` header
-or protect secrets in an `Authorization` header. Applications must set their own
+prevent later mutation during DNS. The pinned agent rejects custom routing
+headers, while the standalone interceptor passes them through. Neither mode
+protects secrets in an `Authorization` header. Applications must set their own
 header and path policy.
 
-The interceptor does not pin the checked DNS answers to
+The standalone interceptor does not pin the checked DNS answers to
 the socket used by Undici; DNS changes between validation and connection remain
 a time-of-check/time-of-use risk. Use connection-time enforcement or validated
 address pinning with correct TLS/SNI handling, plus network egress controls when
 required. Custom connectors and proxies can change the actual socket target and
-must enforce the same policy themselves.
+must enforce the same policy themselves. `createSsrfAgent` provides direct
+connection pinning and does not accept those overrides. It pins the first
+validated answer rather than falling back to a fresh resolver when connection
+fails. Network egress controls remain useful defense in depth.
 
 Every redirect needs a fresh policy check. Interceptor composition order matters:
 a redirect/retry interceptor that redispatches through an inner function can
@@ -110,10 +141,13 @@ npm install
 npm test
 ```
 
-Tests use deterministic DNS and Undici `MockAgent`, including a real
-`compose()`/`request()` integration. They check pre-dispatch rejection, synchronous
-return type, allowed dispatch, mutable-origin isolation, and error delivery
-without unhandled rejections. No remote HTTP service is contacted.
+Tests use deterministic DNS, Undici `MockAgent`, and actual local HTTP/TLS sockets.
+They verify connection-time rebinding rejection, private/mixed-answer rejection,
+canonical Host/SNI, certificate verification, and the absence of an OS DNS lookup.
+The preflight suite checks synchronous return type, allowed dispatch,
+mutable-origin isolation, and error delivery without unhandled rejections.
+Local socket fixtures explicitly allow loopback; production defaults do not.
+No remote HTTP service is contacted.
 
-The dependency remains pinned to `github:hon900/hostfence#v1.3.0`; the umbrella
+The dependency is pinned to `github:hon900/hostfence#v1.4.1`; the umbrella
 workspace can explicitly link its local core checkout for integration testing.

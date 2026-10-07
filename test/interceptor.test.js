@@ -39,7 +39,7 @@ test("allowed requests dispatch only after policy completes and preserve handler
   assert.equal(received.opts.path, opts.path);
   assert.equal(received.opts.method, opts.method);
   assert.equal(received.opts.body, opts.body);
-  assert.equal(typeof received.opts.connect.lookup, "function");
+  assert.equal(received.opts.connect, undefined, "preflight cannot configure an existing dispatcher's connector");
   assert.equal(received.handler, handler);
 });
 
