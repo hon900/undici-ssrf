@@ -17,7 +17,7 @@
     "undici": ">=6"
   },
   "dependencies": {
-    "hostfence": "github:hon900/hostfence#v1.3.0"
+    "hostfence": "github:hon900/hostfence#v1.4.0"
   },
   "devDependencies": {
     "undici": "^6.21.3"

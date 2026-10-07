@@ -1,4 +1,4 @@
-import { Hostfence, HostfenceError } from "hostfence";
+import { Hostfence, HostfenceError, pinLookup } from "hostfence";
 
 const fence = new Hostfence();
 
@@ -60,10 +60,11 @@ export function createSsrfInterceptor(policy = {}) {
         reportError(handler, error);
         return true;
       }
-      void policyFence.assert(request.origin).then(
-        (validated) => {
+      void policyFence.assertPin(request.origin).then(
+        ({ url, pin }) => {
           try {
-            request.origin = validated.origin;
+            request.origin = url.origin;
+            request.connect = { ...(request.connect ?? {}), lookup: pinLookup(pin) };
             dispatch(request, handler);
           } catch (error) {
             reportError(handler, error);

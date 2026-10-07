@@ -35,7 +35,11 @@ test("allowed requests dispatch only after policy completes and preserve handler
   assert.equal(received, undefined);
   resolveLookup(["93.184.216.34"]);
   await nextTurn();
-  assert.deepEqual(received.opts, opts);
+  assert.equal(received.opts.origin, opts.origin);
+  assert.equal(received.opts.path, opts.path);
+  assert.equal(received.opts.method, opts.method);
+  assert.equal(received.opts.body, opts.body);
+  assert.equal(typeof received.opts.connect.lookup, "function");
   assert.equal(received.handler, handler);
 });
 
